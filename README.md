@@ -336,42 +336,6 @@ The server exposes a structured RESTful API under `/api/v1`:
 - **Redis**: `7.x`
 - **Docker & Docker Compose** (Optional, recommended for isolated setup)
 
-### Environment Variables Configuration
-Create a `.env` file in `Server/`:
-
-```env
-PORT=5001
-NODE_ENV=development
-FRONTEND_URL=http://localhost:3000
-
-# Database
-DATABASE_URL="postgresql://postgres:password@localhost:5432/kafla_db?schema=public"
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
-
-# Authentication
-JWT_ACCESS_SECRET="your-256-bit-access-secret"
-JWT_REFRESH_SECRET="your-256-bit-refresh-secret"
-ACCESS_TOKEN_EXPIRY="15m"
-REFRESH_TOKEN_EXPIRY="7d"
-
-# AWS S3 Storage
-AWS_REGION="ap-south-1"
-AWS_ACCESS_KEY_ID="your-aws-access-key"
-AWS_SECRET_ACCESS_KEY="your-aws-secret-key"
-AWS_S3_BUCKET="kafla-storage-bucket"
-
-# External APIs
-GOOGLE_PLACES_API_KEY="your-google-places-key"
-GEMINI_API_KEY="your-gemini-api-key"
-OPENROUTER_API_KEY="your-openrouter-key"
-EMAIL_USER="your-email@gmail.com"
-EMAIL_PASS="your-app-specific-password"
-```
-
 ### Installation & Database Initialization
 
 ```bash
