@@ -328,7 +328,86 @@ The server exposes a structured RESTful API under `/api/v1`:
 
 ---
 
-## 6. Local Setup & Development
+---
+
+## 6. Containerization & Docker Architecture
+
+The server infrastructure provides a containerized development and deployment pipeline via **Docker** and **Docker Compose**, orchestrating the Express API service and the in-memory Redis presence cache into an isolated virtual bridge network.
+
+```mermaid
+flowchart TD
+    subgraph Host_Machine["Host Environment"]
+        SRC["Local Source Code (./Server)"]
+        CLIENT["Next.js Client (Port 3001)"]
+        POSTGRES[("PostgreSQL 16 (Port 5432)")]
+    end
+
+    subgraph Docker_Compose["Docker Compose Virtual Bridge Network"]
+        subgraph API_Container["Service: kafla-api (node:22-alpine)"]
+            APP["/app (Mounted Volume)"]
+            NM["/app/node_modules (Isolated Anonymous Volume)"]
+            START["Lifecycle: sh -c 'npm run db:generate && npm run dev'"]
+            LOGS["Log Rotation: json-file (max-size: 10m, max-file: 3)"]
+            PORT5001["Exposed Port: 5001"]
+        end
+
+        subgraph Redis_Container["Service: redis (redis:alpine)"]
+            REDIS_PROC["Redis Server Engine (Port 6379)"]
+            REDIS_VOL[("Named Volume: redis_data (/var/lib/redis/data)")]
+        end
+    end
+
+    SRC <==>|Live Bind Mount| APP
+    APP --> START
+    CLIENT <==>|HTTP REST & WebSockets| PORT5001
+    PORT5001 --> APP
+    APP <==>|Pub/Sub, Caching & Presence| REDIS_PROC
+    APP <==>|Prisma ORM Connection| POSTGRES
+    REDIS_PROC <==>|AOF/RDB Persistence| REDIS_VOL
+```
+
+### Containerization Engineering Details
+
+1. **Lightweight Alpine Runtime (`Dockerfile`)**:
+   - Built on `node:22-alpine` to maintain a minimal surface area (< 180MB container footprint vs. standard 1GB+ Debian distributions).
+   - `.dockerignore` sanitization filters local `node_modules`, `.git`, environment files, and build artifacts to prevent host-container architecture leaks.
+
+2. **Isolated Volume Strategy (`docker-compose.yml`)**:
+   - **Live Source Mount**: Maps `.:/app` for real-time hot-reloading with `tsx watch`.
+   - **Anonymous Node Modules Volume**: Designates `/app/node_modules` as an isolated container volume. This guarantees compiled Linux native binaries (e.g., `bcrypt`, native bindings) remain uncorrupted by host OS filesystem differences (Windows/macOS).
+   - **Persistent Redis State**: Utilizes the named volume `redis_data` mounted to `/var/lib/redis/data` to preserve cached presence rosters and volatile session states across container restarts.
+
+3. **Autonomous Schema Synchronization**:
+   - Executes `npm run db:generate && npm run dev` directly on container startup, ensuring the Prisma Client type definitions automatically mirror any schema updates without requiring full image rebuilds.
+
+4. **Production-Grade Log Rotation**:
+   - Limits Docker JSON log growth via `max-size: '10m'` and `max-file: '3'`, protecting container hosts from uncontrolled disk saturation under heavy WebSocket throughput.
+
+### Docker Operations & Lifecycle Commands
+
+```bash
+# 1. Build and boot all services in attached mode
+docker compose up --build
+
+# 2. Boot services in background daemon mode
+docker compose up -d
+
+# 3. Stream real-time logs from the API container
+docker compose logs -f kafla-api
+
+# 4. Execute database migrations inside the active container
+docker compose exec kafla-api npm run db:migrate
+
+# 5. Open an interactive sh session inside the container
+docker compose exec -it kafla-api sh
+
+# 6. Graceful shutdown and volume teardown
+docker compose down -v
+```
+
+---
+
+## 7. Local Setup & Manual Development
 
 ### Prerequisites
 - **Node.js**: `v20.x` or `v22.x` (LTS)
@@ -352,16 +431,9 @@ npm run db:migrate
 npm run dev
 ```
 
-### Running via Docker Compose
-
-```bash
-# Spins up PostgreSQL, Redis, and the Kafla Server container
-docker compose up --build
-```
-
 ---
 
-## 7. Verification & Production Build
+## 8. Verification & Production Build
 
 ```bash
 # Type check and build TypeScript into dist/
@@ -373,7 +445,7 @@ npm run start
 
 ---
 
-## 8. Engineering Highlights for Technical Reviewers
+## 9. Engineering Highlights for Technical Reviewers
 
 When evaluating this codebase, consider these specific implementations:
 - [`get-balances.usecase.ts`](file:///F:/Brocamp/Second%20Project/Kafla/Server/src/application/use-cases/expense/get-balances.usecase.ts): Cash flow graph minimization algorithm reducing $O(V^2)$ debts to $O(V - 1)$ transactions.
