@@ -1,0 +1,26 @@
+export enum ExpenseCategory {
+  ACCOMMODATION = "ACCOMMODATION",
+  ACTIVITIES = "ACTIVITIES",
+  ENTERTAINMENT = "ENTERTAINMENT",
+  FOOD = "FOOD",
+  MEDICAL = "MEDICAL",
+  OTHERS = "OTHERS",
+  SHOPPING = "SHOPPING",
+  TICKETS = "TICKETS",
+  TRANSPORT = "TRANSPORT",
+}
+
+export enum ExpenseSplitMethod {
+  CUSTOM = "CUSTOM",
+  EQUAL = "EQUAL",
+  PERCENTAGE = "PERCENTAGE",
+  SHARES = "SHARES",
+}
+
+export enum ExpenseActivityType {
+  CREATED = "CREATED",
+  DELETED = "DELETED",
+  SETTLED = "SETTLED",
+  UNSETTLED = "UNSETTLED",
+  UPDATED = "UPDATED",
+}

@@ -1,0 +1,124 @@
+model Country {
+  code         String        @id @db.VarChar(10)
+  name         String        @db.VarChar(100)
+  phonePrefix  String?       @map("phone_prefix") @db.VarChar(10)
+  destinations Destination[]
+
+  @@map("countries")
+}
+
+model Destination {
+  id          String      @id @default(uuid()) @db.Uuid
+  placeId     String      @unique @map("place_id") @db.VarChar(255)
+  name        String      @db.VarChar(255)
+  city        String?     @db.VarChar(255)
+  state       String?     @db.VarChar(255)
+  countryCode String      @map("country_code") @db.VarChar(10)
+  latitude    Decimal     @db.Decimal(10, 8)
+  longitude   Decimal     @db.Decimal(11, 8)
+  coverUrl    String?     @map("cover_url") @db.VarChar(500)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  country     Country     @relation(fields: [countryCode], references: [code])
+  tripGroups  TripGroup[]
+
+  @@index([placeId])
+  @@index([countryCode])
+  @@index([state])
+  @@map("destinations")
+}
+
+model TripGroup {
+  id            String      @id @default(uuid()) @db.Uuid
+  name          String      @db.VarChar(255)
+  description   String?     @db.Text
+
+  destinationId String      @map("destination_id") @db.Uuid
+  destination   Destination @relation(fields: [destinationId], references: [id])
+
+  dateFrom      DateTime    @map("date_from") @db.Date
+  dateTo        DateTime    @map("date_to") @db.Date
+  coverUrl      String?     @map("cover_url") @db.VarChar(500)
+  currencyCode  String      @default("USD") @map("currency_code") @db.VarChar(10)
+  statusCode    String      @default("upcoming") @map("status_code") @db.VarChar(20)
+
+  inviteCode    String      @unique @map("invite_code") @db.VarChar(20)
+  createdBy     String      @map("created_by") @db.Uuid
+  owner         User        @relation("TripGroupOwner", fields: [createdBy], references: [id])
+
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  members            TripGroupMember[]
+  invites            TripGroupInvite[]
+  checklistItems     ChecklistItem[]
+  expenses           Expense[]
+  expenseSettlements ExpenseSettlement[]
+  itineraryDays      ItineraryDay[]
+  chatConversation   ChatConversation?
+  calls              Call[]              @relation("TripGroupCalls")
+
+  @@index([destinationId])
+  @@index([createdBy])
+  @@index([statusCode])
+  @@map("trip_groups")
+}
+
+model TripGroupMember {
+  id       String         @id @default(uuid()) @db.Uuid
+  groupId  String         @map("group_id") @db.Uuid
+  userId   String         @map("user_id") @db.Uuid
+  roleCode TripMemberRole @default(MEMBER) @map("role_code")
+  addedBy  String?        @map("added_by") @db.Uuid
+  joinedAt DateTime       @default(now()) @map("joined_at") @db.Timestamptz(6)
+  leftAt   DateTime?      @map("left_at") @db.Timestamptz(6)
+  isActive Boolean        @default(true) @map("is_active")
+
+  group               TripGroup           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedTasks       ChecklistItem[]     @relation("ChecklistAssignedMember")
+  paidExpenses        Expense[]           @relation("ExpensePaidBy")
+  expenseShares       ExpenseShare[]
+  paidShares          ExpenseShare[]      @relation("SharePaidBy")
+  settlementsPaid     ExpenseSettlement[] @relation("SettlementPayer")
+  settlementsReceived ExpenseSettlement[] @relation("SettlementReceiver")
+  createdActivities   ItineraryActivity[]
+  createdDays         ItineraryDay[]
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@map("trip_members")
+}
+
+model TripGroupInvite {
+  id               String           @id @default(uuid()) @db.Uuid
+  groupId          String           @map("group_id") @db.Uuid
+  invitedBy        String           @map("invited_by") @db.Uuid
+  invitedUserEmail String?          @map("invited_user_email")
+  message          String?
+  statusCode       TripInviteStatus @default(PENDING) @map("status_code")
+  expiresAt        DateTime?        @map("expires_at") @db.Timestamptz(6)
+  respondedAt      DateTime?        @map("responded_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  group   TripGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  inviter User      @relation("TripGroupInviter", fields: [invitedBy], references: [id])
+
+  @@index([groupId])
+  @@index([invitedUserEmail])
+  @@map("trip_group_invites")
+}
+
+enum TripMemberRole {
+  ADMIN
+  MEMBER
+}
+
+enum TripInviteStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}

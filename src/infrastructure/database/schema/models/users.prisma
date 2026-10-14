@@ -1,0 +1,46 @@
+model User {
+  id           String  @id @default(uuid()) @db.Uuid
+  fullName     String  @map("full_name") @db.VarChar(100)
+  email        String  @unique @db.VarChar(255)
+  phone        String? @unique @db.VarChar(20)
+  passwordHash String? @map("password_hash") @db.VarChar(255)
+  avatarUrl    String? @map("avatar_url") @db.VarChar(500)
+
+  isEmailVerified   Boolean       @default(false) @map("is_email_verified")
+  emailVerifiedAt   DateTime?     @map("email_verified_at") @db.Timestamptz(6)
+  accountStatusCode AccountStatus @default(ACTIVE) @map("account_status_code")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  onboarding          UserOnboardingSource?
+  ownedGroups         TripGroup[]         @relation("TripGroupOwner")
+  groupMemberships    TripGroupMember[]
+  createdTasks        ChecklistItem[]     @relation("ChecklistCreator")
+  createdExpenses     Expense[]           @relation("ExpenseCreator")
+  expenseActivities   ExpenseActivity[]
+  groupInvitesSent    TripGroupInvite[]   @relation("TripGroupInviter")
+  checklistActivities ChecklistActivity[]
+  chatMessages        ChatMessage[]
+  initiatedCalls      Call[]              @relation("CallCaller")
+  callParticipants    CallParticipant[]
+
+  @@index([email])
+}
+
+model UserOnboardingSource {
+  userId               String   @id @map("user_id") @db.Uuid
+  onboardingSourceCode String?  @map("onboarding_source_code") @db.VarChar(50)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_onboarding")
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DEACTIVATED
+}

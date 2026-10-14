@@ -1,0 +1,69 @@
+import { config } from '../../../../config/env.config';
+import { EmailAlreadyExistsError } from '../../../../domain/errors/auth.error';
+import { RegisterRequestDTO } from '../../../dtos/auth/user/request/register.dto';
+import { RegisterResponseDTO } from '../../../dtos/auth/user/responce/register.dto';
+import { IUserRepository } from '../../../interfaces/repositories/user.reposetory';
+import { IHashService } from '../../../interfaces/services/hash.service.interface';
+import { IOtpService } from '../../../interfaces/services/otp.service.interface';
+import { ISessionService } from '../../../interfaces/services/session.service.interface';
+import { ITokenService } from '../../../interfaces/services/token.service.interface';
+import ms, { StringValue } from 'ms';
+import { IRegister } from '../../../interfaces/use-cases/auth/user/register.interface';
+import { inject, injectable } from 'tsyringe';
+import { TOKENS } from '../../../../infrastructure/di/tokens';
+@injectable()
+export class Register implements IRegister {
+  private readonly _refreshTtl: number;
+
+  constructor(
+    @inject(TOKENS.IUserRepository)
+    private readonly _userRepository: IUserRepository,
+    @inject(TOKENS.IHashService)
+    private readonly _hashService: IHashService,
+    @inject(TOKENS.ITokenService)
+    private readonly _tokenService: ITokenService,
+    @inject(TOKENS.ISessionService)
+    private readonly _sessionService: ISessionService,
+    @inject(TOKENS.IOtpService)
+    private readonly _otpService: IOtpService,
+  ) {
+    this._refreshTtl =
+      ms((config.jwt.refreshExpiration ?? '7d') as StringValue) / 1000;
+  }
+
+  async execute(dto: RegisterRequestDTO): Promise<RegisterResponseDTO> {
+    const isExist = await this._userRepository.findByEmail(dto.email);
+
+    if (isExist) throw new EmailAlreadyExistsError();
+
+    const passwordHash = await this._hashService.hash(dto.password);
+
+    const user = await this._userRepository.createUser({
+      fullName: dto.fullName,
+      email: dto.email,
+      passwordHash,
+    });
+    const accessToken = this._tokenService.generateAccessToken({
+      email: user.email,
+      userId: user.id,
+    });
+    const refreshToken = this._tokenService.generateRefreshToken({
+      email: user.email,
+      userId: user.id,
+    });
+    const tokenHash = this._tokenService.hashToken(refreshToken);
+    await this._sessionService.store(user.id, tokenHash, this._refreshTtl);
+
+    await this._otpService.send(user.email, 'email_verify');
+
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+      },
+    };
+  }
+}

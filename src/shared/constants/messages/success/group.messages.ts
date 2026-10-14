@@ -1,0 +1,15 @@
+export const TRIP_MESSAGES = {
+  TRIP_GROUP_CREATED: 'Trip group created',
+  FETCHED_ACTIVE_GROUPS: 'Fetched active groups',
+  ADDED_MEMBER: 'Added members to group',
+  GET_MEMBERS: 'Fetched trip members',
+  GET_GROUP: 'Fetched group data',
+  GET_INVITE_CODE: 'Fetched invite code',
+  INVITE_SENT: 'Invite email sent',
+  JOINED_GROUP: 'Joined trip group',
+  GET_INVITES: 'Fetched invites',
+  CHANGE_ROLE: 'Role changed successfully',
+  REMOVE_MEMBER: 'Member removed successfully',
+  LEFT_GROUP: 'Left from group successfully',
+  GET_WEATHER: 'Fetched weather',
+};
