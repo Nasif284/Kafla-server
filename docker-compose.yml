@@ -1,5 +1,6 @@
 services:
   kafla-api:
+    image: ${DOCKER_IMAGE:-kafla-server-kafla-api:latest}
     build:
       context: .
       dockerfile: Dockerfile
