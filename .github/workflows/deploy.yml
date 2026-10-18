@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-push:
-    name: Build & Push Docker Image
+    name: Build & Push Production Image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
@@ -26,7 +26,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.prod
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/kafla-api:latest
@@ -39,7 +39,19 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Execute Remote Deployment via SSH
+      - name: Checkout Source Code for Compose Spec
+        uses: actions/checkout@v4
+
+      - name: Copy docker-compose.prod.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.prod.yml"
+          target: "/home/${{ secrets.EC2_USER }}/kafla-server"
+
+      - name: Execute Zero-Downtime Rollout on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -50,20 +62,18 @@ jobs:
             set -e
             cd /home/${{ secrets.EC2_USER }}/kafla-server
             
-            echo "[CI/CD] Pulling latest repository changes..."
-            git pull origin main
-            
-            echo "[CI/CD] Pulling latest Docker image from Docker Hub..."
             export DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/kafla-api:latest
-            docker pull $DOCKER_IMAGE
+            
+            echo "[CI/CD] Pulling latest production image from Docker Hub..."
+            docker compose -f docker-compose.prod.yml pull kafla-api
             
             echo "[CI/CD] Deploying updated container stack..."
-            DOCKER_IMAGE=$DOCKER_IMAGE docker compose up -d --remove-orphans
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
             
             echo "[CI/CD] Running database migrations (Prisma migrate deploy)..."
-            docker compose exec -T kafla-api npx prisma migrate deploy
+            docker compose -f docker-compose.prod.yml exec -T kafla-api npx prisma migrate deploy
             
             echo "[CI/CD] Pruning unused Docker images..."
             docker image prune -f
             
-            echo "[CI/CD] Deployment to AWS EC2 completed successfully!"
+            echo "[CI/CD] Production deployment completed successfully!"
