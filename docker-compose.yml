@@ -5,13 +5,15 @@ services:
       dockerfile: Dockerfile
     ports:
       - '5001:5001'
-    environment:
+    env_file:
       - .env
     command: sh -c 'npm run db:generate && npm run dev'
     volumes:
       - .:/app
       - /app/node_modules
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_started
     logging:
@@ -19,6 +21,24 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-1234}
+      POSTGRES_DB: ${DB_NAME:-triphq}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups/triphq_backup.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-triphq}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:alpine
@@ -28,4 +48,5 @@ services:
       - redis_data:/var/lib/redis/data
 
 volumes:
+  postgres_data:
   redis_data:

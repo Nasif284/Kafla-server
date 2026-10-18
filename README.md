@@ -332,14 +332,14 @@ The server exposes a structured RESTful API under `/api/v1`:
 
 ## 6. Containerization & Docker Architecture
 
-The server infrastructure provides a containerized development and deployment pipeline via **Docker** and **Docker Compose**, orchestrating the Express API service and the in-memory Redis presence cache into an isolated virtual bridge network.
+The server infrastructure provides a containerized development and deployment pipeline via **Docker** and **Docker Compose**, orchestrating the Express API service, PostgreSQL database, and the in-memory Redis presence cache into an isolated virtual bridge network.
 
 ```mermaid
 flowchart TD
     subgraph Host_Machine["Host Environment"]
         SRC["Local Source Code (./Server)"]
         CLIENT["Next.js Client (Port 3001)"]
-        POSTGRES[("PostgreSQL 16 (Port 5432)")]
+        BACKUP["Initial Data Seed (./backups/triphq_backup.sql)"]
     end
 
     subgraph Docker_Compose["Docker Compose Virtual Bridge Network"]
@@ -349,6 +349,14 @@ flowchart TD
             START["Lifecycle: sh -c 'npm run db:generate && npm run dev'"]
             LOGS["Log Rotation: json-file (max-size: 10m, max-file: 3)"]
             PORT5001["Exposed Port: 5001"]
+        end
+
+        subgraph Postgres_Container["Service: postgres (postgres:16-alpine)"]
+            PG_PROC["PostgreSQL 16 Engine"]
+            PG_HEALTH["Healthcheck: pg_isready -U postgres -d triphq"]
+            PG_INIT["Entrypoint: /docker-entrypoint-initdb.d/01_init.sql"]
+            PG_VOL[("Named Volume: postgres_data (/var/lib/postgresql/data)")]
+            PORT5433["Host Port: 5433 (Internal: 5432)"]
         end
 
         subgraph Redis_Container["Service: redis (redis:alpine)"]
@@ -362,22 +370,28 @@ flowchart TD
     CLIENT <==>|HTTP REST & WebSockets| PORT5001
     PORT5001 --> APP
     APP <==>|Pub/Sub, Caching & Presence| REDIS_PROC
-    APP <==>|Prisma ORM Connection| POSTGRES
+    APP <==>|Internal Network: postgres:5432| PG_PROC
+    BACKUP -.->|Mount on Init| PG_INIT
+    PG_INIT --> PG_PROC
+    PG_PROC <==>|State Persistence| PG_VOL
     REDIS_PROC <==>|AOF/RDB Persistence| REDIS_VOL
 ```
 
 ### Containerization Engineering Details
 
-1. **Lightweight Alpine Runtime (`Dockerfile`)**:
-   - Built on `node:22-alpine` to maintain a minimal surface area (< 180MB container footprint vs. standard 1GB+ Debian distributions).
+1. **Lightweight Alpine Runtime & Multi-Service Topology (`Dockerfile` & `docker-compose.yml`)**:
+   - Built on `node:22-alpine` and `postgres:16-alpine` to maintain a minimal surface area (< 180MB container footprint vs. standard 1GB+ Debian distributions).
    - `.dockerignore` sanitization filters local `node_modules`, `.git`, environment files, and build artifacts to prevent host-container architecture leaks.
 
-2. **Isolated Volume Strategy (`docker-compose.yml`)**:
+2. **Automated Database Bootstrap & Volume Strategy**:
+   - **Automated Backup Restoration**: Mounts `./backups/triphq_backup.sql` to `/docker-entrypoint-initdb.d/01_init.sql` (read-only), automatically bootstrapping schemas, indexes, and existing data on initial volume creation.
+   - **Persistent PostgreSQL Data**: Managed by named volume `postgres_data` mounted to `/var/lib/postgresql/data`.
    - **Live Source Mount**: Maps `.:/app` for real-time hot-reloading with `tsx watch`.
    - **Anonymous Node Modules Volume**: Designates `/app/node_modules` as an isolated container volume. This guarantees compiled Linux native binaries (e.g., `bcrypt`, native bindings) remain uncorrupted by host OS filesystem differences (Windows/macOS).
-   - **Persistent Redis State**: Utilizes the named volume `redis_data` mounted to `/var/lib/redis/data` to preserve cached presence rosters and volatile session states across container restarts.
+   - **Persistent Redis State**: Utilizes named volume `redis_data` mounted to `/var/lib/redis/data` to preserve cached presence rosters and volatile session states across container restarts.
 
-3. **Autonomous Schema Synchronization**:
+3. **Deterministic Service Dependency & Schema Synchronization**:
+   - `kafla-api` utilizes `depends_on` with `condition: service_healthy` on `postgres`, polling `pg_isready -U postgres -d triphq` to ensure the API container only boots once the database is fully initialized and accepting connections.
    - Executes `npm run db:generate && npm run dev` directly on container startup, ensuring the Prisma Client type definitions automatically mirror any schema updates without requiring full image rebuilds.
 
 4. **Production-Grade Log Rotation**:
