@@ -5,12 +5,12 @@ import { config } from './env.config';
 const connectionString = `${process.env.DATABASE_URL}`;
 const adapter = new PrismaPg({
   connectionString,
-  ssl:
-    config.env === 'production'
-      ? {
-          rejectUnauthorized: false,
-        }
-      : false,
+  // ssl:
+  //   config.env === 'production'
+  //     ? {
+  //         rejectUnauthorized: false,
+  //       }
+  //     : false,
 });
 export class DbManager {
   private static _instance: PrismaClient;
