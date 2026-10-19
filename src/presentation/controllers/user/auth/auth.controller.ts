@@ -58,22 +58,25 @@ export class AuthController {
 
   private getCookieOptions(maxAge: number): CookieOptions {
     const isProduction = config.env === 'production';
+    const domain = process.env.FRONTEND_URL?.split('www.')[1];
     return {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'none' : 'lax',
       path: '/',
       maxAge,
+      ...(isProduction ? { domain } : {}),
     };
   }
-
   private getClearCookieOptions(): CookieOptions {
     const isProduction = config.env === 'production';
+    const domain = process.env.FRONTEND_URL?.split('www.')[1];
     return {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'none' : 'lax',
       path: '/',
+      ...(isProduction ? { domain } : {}),
     };
   }
 
@@ -241,11 +244,9 @@ export class AuthController {
         .json({ success: false, message: 'Unauthorized' });
     }
 
-    const token = jwt.sign(
-      { userId, email },
-      config.jwt.accessSecret!,
-      { expiresIn: '30d' },
-    );
+    const token = jwt.sign({ userId, email }, config.jwt.accessSecret!, {
+      expiresIn: '30d',
+    });
 
     return res
       .status(HttpStatus.OK)
