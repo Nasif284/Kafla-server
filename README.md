@@ -1,6 +1,6 @@
-# Kafla Backend Engine (`kafla-server`)
+# Kafla Backend (`kafla-server`)
 
-> High-throughput, event-driven collaborative workspace backend powering multi-tenant group expeditions. Architected with Domain-Driven Design (DDD), Clean Architecture, LangGraph stateful multi-agent workflows, WebRTC mesh signaling, and algorithmic cash flow debt minimization.
+Backend service for **Kafla**, a collaborative group travel planning workspace. Built as a modular monolith using Node.js, Express 5, TypeScript, Clean Architecture, TSyringe (Dependency Injection), PostgreSQL (Prisma ORM), Redis, Socket.IO, and LangGraph.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-22.x-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -8,428 +8,327 @@
 [![Prisma](https://img.shields.io/badge/Prisma-7.8-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io/)
 [![Redis](https://img.shields.io/badge/Redis-Alpine-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Socket.io](https://img.shields.io/badge/Socket.IO-4.8-010101?logo=socketdotio&logoColor=white)](https://socket.io/)
-[![LangChain](https://img.shields.io/badge/LangGraph-Agentic-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-1C3C3C?logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraphjs/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
 ---
 
-## 1. System Architecture & Design Philosophy
+## 1. Architecture Overview
 
-The Kafla server is built around **Clean Architecture** (Hexagonal / Ports-and-Adapters) and **Domain-Driven Design (DDD)**. The system isolates pure business logic from third-party frameworks, databases, and network transports. 
-
-All dependencies flow inwards toward the Domain:
+The backend is structured as a **Clean Architecture modular monolith**. Business rules and use cases are kept separate from Express controllers, Prisma database repositories, and third-party APIs.
 
 ```mermaid
 flowchart TD
-    subgraph Presentation_Layer["Presentation Layer (HTTP & WebSockets)"]
-        EX[Express 5 REST Controllers]
-        WS[Socket.IO Gateways: Chat & WebRTC]
-        MW[Auth, Validation & Storage Middlewares]
+    subgraph Presentation_Layer["Presentation Layer (src/presentation)"]
+        EX["Express 5 Controllers & Routes"]
+        WS["Socket.IO Handlers (chat.socket.ts, call.socket.ts)"]
+        MW["Auth, Multer & Error Middlewares"]
+        VAL["Zod Request Validators"]
     end
 
-    subgraph Application_Layer["Application Layer (Use Cases & Interfaces)"]
-        UC[Application Use Cases / Interactors]
-        DTO[Request / Response DTOs & Mappers]
-        PORTS[Service & Repository Interfaces]
+    subgraph Application_Layer["Application Layer (src/application)"]
+        UC["Use Cases (Auth, Trips, Itinerary, Expense, Chat, Calls)"]
+        DTO["Request & Response DTOs"]
+        PORTS["Repository & Service Interfaces"]
     end
 
-    subgraph Domain_Layer["Domain Layer (Enterprise Business Rules)"]
-        ENT[Entities: User, TripGroup, Expense, Call]
-        VO[Value Objects & Enums]
-        ERR[Domain Errors & Business Constraints]
+    subgraph Domain_Layer["Domain Layer (src/domain)"]
+        ENT["Domain Entities"]
+        ENUMS["Enums & Constants"]
+        ERR["Domain Error Classes"]
     end
 
-    subgraph Infrastructure_Layer["Infrastructure Layer (External Adapters)"]
-        DB[(PostgreSQL via Prisma ORM)]
-        CACHE[(Redis: Caching & Presence)]
-        S3[AWS S3 Presigned Object Store]
-        AI[LangGraph + Gemini / OpenRouter]
-        GEO[Google Places API + Open-Meteo]
-        DI[TSyringe IoC Container]
+    subgraph Infrastructure_Layer["Infrastructure Layer (src/infrastructure)"]
+        DB[("PostgreSQL via Prisma ORM")]
+        REDIS[("Redis: OTPs, Refresh Sessions & Chat Presence")]
+        S3["AWS S3 Storage Service"]
+        AI["LangGraph Itinerary Workflow + Gemini / OpenRouter"]
+        EXTERNAL["Google Places API + Open-Meteo Weather API"]
+        DI["TSyringe DI Container"]
     end
 
-    EX --> UC
+    EX --> VAL --> UC
     WS --> UC
     MW --> PORTS
     UC --> ENT
     UC --> PORTS
     PORTS -.-> DB
-    PORTS -.-> CACHE
+    PORTS -.-> REDIS
     PORTS -.-> S3
     PORTS -.-> AI
-    PORTS -.-> GEO
+    PORTS -.-> EXTERNAL
     DI --> Application_Layer
     DI --> Infrastructure_Layer
 ```
 
-### Architectural Principles Implemented
-- **Inversion of Control (IoC) with TSyringe**: Every repository, use case, and external service is resolved via explicit dependency tokens. Zero hardcoded singletons or tight coupling between business logic and database drivers.
-- **Strict Separation of Concerns**: Controllers only handle HTTP status codes and serialization. Use cases execute transactional orchestrations. Repositories handle database persistence.
-- **Stateless Application Servers**: All ephemeral state (user presence, active room rosters) is stored in Redis, allowing horizontal scaling behind reverse proxies without session stickiness issues.
-- **Event-Driven Asynchronous Pipeline**: Multi-peer WebRTC signaling and real-time chat operate over a decoupled WebSocket gateway with JWT authorization checks at the handshake and frame levels.
+### Design Choices
+- **Dependency Injection with TSyringe (`src/infrastructure/di`)**: Controllers and use cases depend on TypeScript interfaces (`IExpenseRepository`, `IStorageService`, `IAIModelService`) bound to symbol tokens (`TOKENS`), keeping business logic decoupled from concrete implementations.
+- **Layer Separation**:
+  - `presentation/`: Express routes, controllers, Zod validators, and middlewares.
+  - `application/`: Use cases, DTOs, and repository/service interfaces.
+  - `domain/`: Entities, enums, and custom domain errors.
+  - `infrastructure/`: Prisma repositories, Redis services, Socket.IO handlers, S3 storage, and the LangGraph itinerary workflow.
 
 ---
 
-## 2. Core Engineering Deep Dives
+## 2. Core Implementation Details
 
-### 2.1. Algorithmic Cash Flow Debt Minimization (Two-Pointer Greedy Net Settlement)
+### 2.1. Expense Splitting & Debt Simplification (`get-balances.usecase.ts`)
 
-In standard group travel, $n$ members generate an $O(n^2)$ dense directed graph of tangled debts. For example, 5 travelers with 15 cross-shared expenses often result in 10+ confusing mutual payments.
-
-Kafla implements a **Greedy Cash Flow Minimization Algorithm** (`get-balances.usecase.ts`) that transforms the multi-payer debt graph into a net flow network, reducing settlements to at most $V - 1$ transactions:
+When multiple group members pay for shared expenses across a trip, tracking every individual pairwise debt quickly becomes messy. Kafla supports two balance views (`ORIGINAL` and `SIMPLIFIED`):
 
 ```mermaid
 flowchart LR
-    subgraph Raw_Pairwise_Debts["Tangled Graph: 10 Transactions"]
+    subgraph Raw_Debts["ORIGINAL Mode: Pairwise Debts"]
         A((Dev)) -->|₹2,000| B((Priya))
         C((Arjun)) -->|₹1,500| A
         B -->|₹3,500| D((Rohan))
-        E((Sneha)) -->|₹2,100| C
-        A -->|₹2,350| D
+        A -->|₹850| D
     end
 
-    subgraph Net_Settlement_Algorithm["Greedy Two-Pointer Net Balance Engine"]
-        CALC["1. Calculate Net Balances: beta(v) = Sum(Paid) - Sum(Owed)"]
-        PART["2. Partition into Disjoint Sets: Creditors beta > 0 & Debtors beta < 0"]
-        MATCH["3. Two-Pointer Min-Cut Resolution: Settle min(credit, debt)"]
+    subgraph Algorithm["SIMPLIFIED Mode (buildSimplifiedDebtGraph)"]
+        STEP1["1. Calculate net balance per member: paid - owed + settled"]
+        STEP2["2. Split members into Creditors (balance > 0) and Debtors (balance < 0)"]
+        STEP3["3. Two-pointer loop: match debtor with creditor using Math.min(credit, debt)"]
     end
 
-    subgraph Optimized_Settlements["Minimal Cash Flow: 2 Transactions"]
-        O1((Dev)) ==>|₹4,350| O2((Rohan))
-        O3((Sneha)) ==>|₹2,100| O4((Arjun))
+    subgraph Simplified["Minimized Transactions"]
+        S1((Dev)) ==>|₹1,350| S2((Rohan))
+        S3((Priya)) ==>|₹1,500| S2
+        S4((Arjun)) ==>|₹1,500| S3
     end
 
-    Raw_Pairwise_Debts --> CALC --> PART --> MATCH --> Optimized_Settlements
+    Raw_Debts --> STEP1 --> STEP2 --> STEP3 --> Simplified
 ```
 
-#### Mathematical Formulation & Time Complexity
-1. **Net Balance Vector**: For each member $v \in V$:
-   $$\beta(v) = \sum_{e \in E_{\text{in}}(v)} \text{amount}(e) - \sum_{e \in E_{\text{out}}(v)} \text{amount}(e)$$
-2. **Partitioning**: Disjoint subsets $C = \{v \in V \mid \beta(v) > 0\}$ and $D = \{v \in V \mid \beta(v) < 0\}$.
-3. **Two-Pointer Convergence**:
-   $$\text{settled} = \min(\text{remaining}(C_i), |\text{remaining}(D_j)|)$$
-   Runs in $O(V \log V)$ due to balance sorting/iteration, down from $O(V^2)$ manual transactions.
-4. **Dual Modes Supported**: Users can inspect the un-simplified pairwise multigraph (`mode: ORIGINAL`) or the optimized net settlement graph (`mode: SIMPLIFIED`).
+- **How `buildSimplifiedDebtGraph` works**:
+  1. Sums each member's total `paid`, `owed` (from `expense_shares`), and existing `settlements` to compute their net `balance`.
+  2. Filters members with `balance > 0` into a `creditors` list and members with `balance < 0` into a `debtors` list.
+  3. Walks through both lists with two pointers (`creditorIndex` and `debtorIndex`), settling `Math.min(creditor.remaining, debtor.remaining)` at each step and advancing whichever pointer reaches `0`. This reduces the total number of payments to at most $N - 1$ in a single $O(N)$ pass over the members.
+- **Penny/Paisa Rounding on Equal Splits (`calculateSplit.ts`)**:
+  - When splitting an expense evenly (`EQUAL`), `calculateExpenseShares` rounds each share to 2 decimal places and assigns any remaining cent/paisa difference to the last participant (`amount - shareAmount * (participants.length - 1)`) so the shares always add up to the exact total.
 
 ---
 
-### 2.2. Agentic Self-Healing Itinerary Engine (LangGraph StateGraph)
+### 2.2. AI Itinerary Generation with LangGraph (`itinerary.graph.ts`)
 
-Rather than naive, fragile single-prompt LLM completions, Kafla executes a deterministic, self-healing **StateGraph** built with `@langchain/langgraph` (`itinerary.graph.ts`).
-
-The agent features contextual RAG geo-enrichment, JSON schema enforcement, pacing validation, and an autonomous repair loop:
+Instead of relying on a single LLM prompt that can return broken JSON or made-up places, the AI itinerary generator uses a **LangGraph `StateGraph`** (`src/infrastructure/ai/ai-itinerary/itinerary.graph.ts`) with Google Places enrichment, Zod validation, and a retry/repair loop:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ValidateContext: User Input (Dest, Budget, Pace, Days)
-    ValidateContext --> PlacesContext: Coordinates & Bounds Validated
+    [*] --> validate_context: Trip destination, dates, pace & preferences
+    validate_context --> places_context: Context valid
     
-    state PlacesContext {
-        [*] --> FetchPOIs: Query Google Places API
-        FetchPOIs --> RankCategories: Food, Sightseeing, Transport
-        RankCategories --> [*]
+    state places_context {
+        [*] --> FetchNearby: Parallel Google Places API (searchNearby)
+        FetchNearby --> BuildPromptContext: Attractions, Restaurants, Cafes, Parks
+        BuildPromptContext --> [*]
     }
     
-    PlacesContext --> Planner: Structured Context Injected
-    Planner --> ResponseValidator: LLM Generates Day Plan
+    places_context --> planner: Inject verified nearby places & coordinates
+    planner --> response_validator: Raw LLM JSON output
     
-    state ResponseValidator <<choice>>
-    ResponseValidator --> RouteValidation: Schema & Pacing OK
-    ResponseValidator --> RepairResponse: Validation Error Detected (Retry < 3)
-    ResponseValidator --> FailureNode: Exceeded Max Retries
+    state routeValidation <<choice>>
+    response_validator --> routeValidation: Normalize categories, times & run Zod parse
     
-    RepairResponse --> ResponseValidator: Self-Healing with Feedback
+    routeValidation --> [*]: validationErrors.length === 0 (Success)
+    routeValidation --> repair_response: Errors found & repairAttempts < 2
+    routeValidation --> failure: repairAttempts >= 2
     
-    state RouteValidation <<choice>>
-    RouteValidation --> [*]: Driving Bounds & Sequence OK
-    RouteValidation --> RepairResponse: Route Impossible / Geo Disconnected
-    
-    FailureNode --> [*]: Return Graceful Fallback
+    repair_response --> response_validator: Re-prompt LLM with validation errors
+    failure --> [*]: Throw error / fallback
 ```
 
-#### Resiliency Mechanisms:
-- **Geo-Context Injection (`places-context.node.ts`)**: Enriches the LLM prompt with verified GPS coordinates and place IDs from Google Places, eliminating location hallucinations.
-- **Pacing Engine**: Computes daily activity durations and travel distances, scoring daily itineraries as *Relaxed*, *Balanced*, or *Packed*.
-- **Autonomous Repair Loop (`repair.node.ts`)**: When schema parsing or distance limits fail, the validator formats explicit diagnostic feedback back into the prompt context for targeted self-correction.
+1. **`validate-context` (`validate.node.ts`)**: Verifies required trip parameters before making external API calls.
+2. **`places-context` (`place-context.node.ts`)**: Runs 4 parallel Google Places `searchNearby` queries (`Promise.all`) around the destination coordinates for tourist attractions, restaurants, cafes, and parks, passing real place names and coordinates into the prompt.
+3. **`planner` (`planner.node.ts`)**: Calls the AI model service (`Gemini` or `OpenRouter`) to generate a structured day-by-day itinerary.
+4. **`response-validator` (`response-validator.node.ts`)**:
+   - Extracts the JSON object from the model output.
+   - Runs `sanitizeItinerary()` to normalize category names (`FOOD`, `TRANSPORT`, `ACCOMMODATION`, `ACTIVITY`, `SIGHTSEEING`, `OTHER`), ensure positive integer durations, and format `startTime` as `HH:mm`.
+   - Validates the object against `GeneratedItinerarySchema` (Zod).
+5. **`routeValidation` & `repair-response` (`route-validation.ts`, `repair.node.ts`)**:
+   - If `validationErrors` is empty, the graph finishes and returns the itinerary.
+   - If validation fails and `repairAttempts < 2`, `repairResponseNode` sends the original output and the specific validation errors back to the model at low temperature (`0.2`) to fix the JSON, then re-validates.
 
 ---
 
-### 2.3. Multi-Peer WebRTC Signaling Mesh & WebSocket Gateway
+### 2.3. Real-Time Chat, Redis Presence & WebRTC Signaling
 
-Group expeditions require real-time audio/video coordination without third-party meeting links. Kafla operates a dedicated WebRTC signaling gateway with cryptographic authorization:
+Socket connections (`src/infrastructure/socket/`) authenticate during the handshake via `socket-auth.middleware.ts` by reading and verifying the user's JWT cookie.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor PeerA as Traveler A (Offer)
-    participant WS as Socket.IO Gateway
-    participant Auth as IAuthorizeSignalingUseCase
-    participant Redis as Redis Presence Store
-    actor PeerB as Traveler B (Answer)
+    actor UserA as Traveler A
+    participant WS as Socket.IO Server
+    participant Auth as AuthorizeSignalingUseCase
+    actor UserB as Traveler B
 
-    PeerA->>WS: call:join-room (callId)
-    WS->>Redis: SADD room:callId userId
-    WS-->>PeerA: call:room-joined (activePeers[])
+    UserA->>WS: call:join-room (callId)
+    WS->>WS: socket.join("call:" + callId)
+    WS-->>UserA: call:room-joined { callId }
 
-    PeerA->>WS: call:offer { callId, targetUserId: B, sdpOffer }
-    WS->>Auth: authorizeSignaling({ callId, senderId: A, targetUserId: B })
-    Auth-->>WS: Authorized (Both are active group call members)
-    WS->>PeerB: Emit to user:B: call:offer { senderUserId: A, sdpOffer }
+    UserA->>WS: call:offer { callId, targetUserId: B, offer }
+    WS->>Auth: execute({ callId, senderId: A, targetUserId: B })
+    Auth-->>WS: true (Both users belong to the call's trip group)
+    WS->>UserB: io.to("user:" + B).emit("call:offer", { senderUserId: A, offer })
 
-    PeerB->>WS: call:answer { callId, targetUserId: A, sdpAnswer }
-    WS->>Auth: authorizeSignaling({ callId, senderId: B, targetUserId: A })
-    WS->>PeerA: Emit to user:A: call:answer { senderUserId: B, sdpAnswer }
+    UserB->>WS: call:answer { callId, targetUserId: A, answer }
+    WS->>Auth: execute({ callId, senderId: B, targetUserId: A })
+    WS->>UserA: io.to("user:" + A).emit("call:answer", { senderUserId: B, answer })
 
-    Note over PeerA,PeerB: Direct ICE Candidate Negotiation over WebSocket
-    PeerA->>WS: call:ice-candidate { targetUserId: B, candidate }
-    WS->>PeerB: Emit to user:B: call:ice-candidate
-    Note over PeerA,PeerB: P2P Encrypted WebRTC Audio/Video Mesh Established
+    UserA->>WS: call:ice-candidate { callId, targetUserId: B, candidate }
+    WS->>Auth: execute({ callId, senderId: A, targetUserId: B })
+    WS->>UserB: io.to("user:" + B).emit("call:ice-candidate", { senderUserId: A, candidate })
 ```
 
-#### Security & Concurrency Controls
-- **Signaling Hijack Prevention**: `IAuthorizeSignalingUseCase` verifies that both the sender and the recipient are verified members of the associated `TripGroup` and active in the call room before forwarding SDP or ICE packets.
-- **Heartbeat & Disconnect Resilience**: Socket disconnects automatically trigger peer cleanup, update the Redis presence roster, and notify remaining callers.
+- **Multi-Tab User Presence in Redis (`presence.service.ts`)**:
+  - When a user connects to `chat.socket.ts`, their `socket.id` is added to a Redis set (`presence:sockets:{userId}`) and their status is marked in a Redis hash (`presence:online`).
+  - When a tab disconnects, its `socket.id` is removed from the set. The user is only marked offline (recording a timestamp in `presence:last_seen` and broadcasting `presence:user_offline`) when the set count reaches `0` (all tabs closed).
+- **Authorized WebRTC Signaling (`call.socket.ts`)**:
+  - Each user joins a personal room (`user:{userId}`) on connect.
+  - Before forwarding any `call:offer`, `call:answer`, or `call:ice-candidate` event to `user:{targetUserId}`, `call.socket.ts` runs `IAuthorizeSignalingUseCase` to confirm both the sender and target user are members of the trip group associated with `callId`.
 
 ---
 
-### 2.4. Inversion of Control (IoC) & Dependency Injection
+### 2.4. Auth, Redis Sessions, OTPs & Media Storage
 
-The application uses `tsyringe` to decouple components. Concrete implementations are bound to unique Symbol tokens:
-
-```typescript
-// Example: src/infrastructure/di/expense/dependency.ts
-container.register<IExpenseRepository>(TOKENS.IExpenseRepository, {
-  useClass: ExpenseRepository,
-});
-
-container.register<IGetExpenseBalances>(TOKENS.IGetExpenseBalances, {
-  useClass: GetExpenseBalances,
-});
-```
-
-Controllers and use cases inject abstractions, enabling zero-friction unit testing via mock repositories:
-
-```typescript
-@injectable()
-export class GetExpenseBalances implements IGetExpenseBalances {
-  constructor(
-    @inject(TOKENS.IExpenseRepository)
-    private readonly _expenseRepository: IExpenseRepository,
-    @inject(TOKENS.IStorageService)
-    private readonly _storageService: IStorageService,
-  ) {}
-  // ...
-}
-```
+1. **JWT Cookie & Bearer Authentication (`auth.controller.ts`, `userAuth.middleware.ts`)**:
+   - Login and registration issue a short-lived `accessToken` (15m) and a `refreshToken` (7d), both set as `HttpOnly` cookies (`secure: true` and `sameSite: 'none'` in production; `sameSite: 'lax'` in local development).
+   - `userAuth.middleware.ts` reads the token from `req.cookies.accessToken` or the `Authorization: Bearer <token>` header (used by the MCP server).
+2. **Redis Session Tracking (`session.service.ts`)**:
+   - Refresh token hashes are stored in Redis under `session:{userId}:{tokenHash}` with a TTL matching the refresh expiry, allowing sessions to be checked on token refresh and revoked on logout.
+3. **Hashed Email OTPs with Attempt Limits (`email-otp.service.ts`)**:
+   - Generates a 6-digit OTP, hashes it with `bcrypt`, and stores `{ codeHash, attempts: 0 }` in Redis under `otp:{purpose}:{email}` with a 10-minute expiry.
+   - Automatically deletes the OTP and blocks verification after 3 failed attempts.
+4. **S3 Media Uploads & Presigned Read URLs (`storage.service.ts`, `upload-chat-image.use-case.ts`)**:
+   - Image uploads are parsed with `multer.memoryStorage()`, checked for allowed MIME types (`jpeg`, `png`, `webp`, `gif`) and a 10MB size limit, and uploaded to AWS S3 (`PutObjectCommand`).
+   - Private S3 keys are converted to temporary 1-hour presigned URLs (`GetObjectCommand` via `@aws-sdk/s3-request-presigner`) when returning data to the client.
 
 ---
 
-## 3. Relational Data Modeling (PostgreSQL + Prisma)
+## 3. Database Schema (PostgreSQL + Prisma)
 
-The database schema is partitioned across 7 modular domain schemas:
+The Prisma schema is split into domain model files under `src/infrastructure/database/schema/models/`:
 
 ```mermaid
 erDiagram
-    USERS ||--o{ TRIP_GROUP_MEMBERS : "joins"
-    USERS ||--o{ EXPENSES : "creates"
-    DESTINATIONS ||--o{ TRIP_GROUPS : "hosts"
+    User ||--o{ trip_members : "joins"
+    User ||--o{ expenses : "creates"
+    destinations ||--o{ trip_groups : "hosts"
     
-    TRIP_GROUPS ||--|{ TRIP_GROUP_MEMBERS : "contains"
-    TRIP_GROUPS ||--o{ EXPENSES : "tracks"
-    TRIP_GROUPS ||--o{ EXPENSE_SETTLEMENTS : "settles"
-    TRIP_GROUPS ||--o{ ITINERARY_DAYS : "schedules"
-    TRIP_GROUPS ||--o{ CHECKLIST_ITEMS : "assigns"
-    TRIP_GROUPS ||--o{ CHAT_CONVERSATIONS : "owns"
-    TRIP_GROUPS ||--o{ CALLS : "hosts"
+    trip_groups ||--|{ trip_members : "contains"
+    trip_groups ||--o{ expenses : "tracks"
+    trip_groups ||--o{ expense_settlements : "settles"
+    trip_groups ||--o{ itinerary_days : "schedules"
+    trip_groups ||--o{ checklist_items : "assigns"
+    trip_groups ||--o{ chat_conversations : "owns"
+    trip_groups ||--o{ calls : "hosts"
 
-    EXPENSES ||--|{ EXPENSE_SHARES : "split into"
-    TRIP_GROUP_MEMBERS ||--o{ EXPENSE_SHARES : "owes"
-    TRIP_GROUP_MEMBERS ||--o{ EXPENSES : "pays"
+    expenses ||--|{ expense_shares : "split into"
+    trip_members ||--o{ expense_shares : "owes"
+    trip_members ||--o{ expenses : "pays"
     
-    ITINERARY_DAYS ||--o{ ITINERARY_ACTIVITIES : "contains"
-    CHECKLIST_ITEMS }o--|| TRIP_GROUP_MEMBERS : "assigned to"
+    itinerary_days ||--o{ itinerary_activities : "contains"
+    checklist_items }o--|| trip_members : "assigned to"
 ```
 
-### Key Schema Optimizations:
-- **Financial Precision**: All monetary values (`amount`, `shares`) use PostgreSQL `@db.Decimal(12, 2)` to eliminate floating-point rounding errors.
-- **Geographic Indexing**: `destinations` table indexed on `placeId`, `countryCode`, and `state`.
-- **Composite Uniqueness**: `expense_shares` enforces `@@unique([expenseId, memberId])`, ensuring no member can be billed twice for the same split.
-- **Partitioned Temporal Queries**: Itinerary activities and expenses indexed by `expenseDate` and `dayIndex` for fast range scans.
+- **Decimal Currency Fields**: Expense amounts, shares, and settlements use `@db.Decimal(12, 2)` in PostgreSQL.
+- **Unique Constraints & Indexes**: `expense_shares` enforces `@@unique([expenseId, memberId])`; `trip_members` enforces `@@unique([groupId, userId])`; `itinerary_days` enforces `@@unique([groupId, date])`.
 
 ---
 
-## 4. API Endpoints Overview
+## 4. API Overview (`/api/v1`)
 
-The server exposes a structured RESTful API under `/api/v1`:
+### Auth (`/api/v1/auth`)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/register` | Register a new user account |
+| `POST` | `/login` | Authenticate with email & password |
+| `POST` | `/google` | Authenticate with Google OAuth token |
+| `POST` | `/send-otp` | Send email OTP for verification or password reset |
+| `POST` | `/verify-otp` | Verify 6-digit email OTP |
+| `POST` | `/refresh` | Refresh access token using `refreshToken` cookie |
+| `POST` | `/logout` | Revoke Redis session and clear auth cookies |
 
-### Authentication & User Identity (`/api/v1/auth`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/register` | Create user with email and credentials | Public |
-| `POST` | `/login` | Authenticate with email/password; issues JWTs | Public |
-| `POST` | `/google` | Google OAuth2 ID token verification | Public |
-| `POST` | `/send-otp` | Request email OTP for verification / password reset | Public |
-| `POST` | `/verify-otp` | Verify OTP token | Public |
-| `POST` | `/refresh` | Rotate access token via HttpOnly refresh cookie | Refresh Cookie |
-| `POST` | `/logout` | Revoke session and clear cookies | Protected |
+### Trips & Groups (`/api/v1/trips`)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/groups` | Create a new trip group |
+| `GET` | `/groups` | List active and upcoming trip groups |
+| `GET` | `/groups/past` | List past trip groups |
+| `GET` | `/groups/:id` | Get trip group details and members |
+| `POST` | `/groups/join/:code` | Join a group via invite code |
+| `GET` | `/groups/:id/weather` | Fetch daily weather forecast via Open-Meteo API |
 
-### Trip Squad Workspace (`/api/v1/trips`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/groups` | Create an expedition workspace group | JWT |
-| `GET` | `/groups` | Fetch active and upcoming groups for current user | JWT |
-| `GET` | `/groups/past` | Fetch concluded / read-only groups | JWT |
-| `GET` | `/groups/:id` | Get complete trip group details and active members | JWT |
-| `POST` | `/groups/join/:code` | Join squad via 6-character code or invite link | JWT |
-| `PATCH` | `/groups/:id/members/role` | Promote/demote members (Owner vs Member) | Group Admin |
+### Itinerary (`/api/v1/trips/group/:groupId/itinerary`)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | Get full multi-day itinerary and activities |
+| `POST` | `/ai-generate` | Generate itinerary using the LangGraph workflow |
+| `POST` | `/days` | Add a day to the itinerary |
+| `POST` | `/activities` | Add an activity to a day |
+| `PATCH` | `/activities/:id` | Update an activity |
+| `DELETE` | `/activities/:id` | Delete an activity |
 
-### Day-by-Day Itinerary Engine (`/api/v1/trips/group/:groupId/itinerary`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Fetch multi-day itinerary with activities and routes | JWT |
-| `POST` | `/ai-generate` | Execute LangGraph agentic itinerary workflow | JWT |
-| `POST` | `/days` | Manually add a travel day | JWT |
-| `POST` | `/activities` | Add an activity with GPS coordinates & time | JWT |
-| `PATCH` | `/activities/:id` | Update timing, cost, notes, or location | JWT |
-| `DELETE` | `/activities/:id` | Remove activity and recalculate pacing | JWT |
+### Expenses (`/api/v1/trips/group/:groupId/expenses`)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/` | Create an expense (`EQUAL`, `PERCENTAGE`, `CUSTOM`, `SHARES`) |
+| `GET` | `/` | List all group expenses |
+| `GET` | `/balances` | Get balances (`mode: ORIGINAL` or `SIMPLIFIED`) |
+| `POST` | `/settle` | Record a balance settlement between two members |
+| `GET` | `/summary` | Get spending summary by category |
+| `GET` | `/report` | Get detailed expense breakdown report |
 
-### Expense Ledger & Debt Minimizer (`/api/v1/trips/group/:groupId/expenses`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/` | Log an expense with Equal, Exact, or % splits | JWT |
-| `GET` | `/` | List all group expenses with shares and payers | JWT |
-| `GET` | `/balances` | Fetch net balances (`mode: ORIGINAL` or `SIMPLIFIED`) | JWT |
-| `POST` | `/settle` | Record an in-app settlement between members | JWT |
-| `GET` | `/summary` | Get category breakdown (Stay, Food, Transport) | JWT |
-| `GET` | `/report` | Generate comprehensive financial export summary | JWT |
-
-### Collaborative Checklists (`/api/v1/trips/group/:groupId/checklist`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Fetch categorized checklist with member assignees | JWT |
-| `POST` | `/task` | Add a packing item with priority (Urgent/High/Med) | JWT |
-| `PATCH` | `/task/:taskId` | Toggle completion status | JWT |
-| `DELETE` | `/task/:taskId` | Delete task item | JWT |
+### Checklists (`/api/v1/trips/group/:groupId/checklist`)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | Get group checklist items and activity log |
+| `POST` | `/task` | Create a checklist item |
+| `PATCH` | `/task/:taskId` | Update item status or assignee |
+| `DELETE` | `/task/:taskId` | Delete a checklist item |
 
 ---
 
-## 5. Security Architecture
+## 5. Docker & CI/CD Deployment
 
-1. **Dual-Token Authentication Pipeline**:
-   - Short-lived Access Tokens (15 min) delivered in memory/headers.
-   - Long-lived Refresh Tokens (7 days) stored in `HttpOnly`, `SameSite: Strict`, `Secure` cookies.
-2. **Presigned S3 Object Storage (`storage.service.ts`)**:
-   - Images and PDFs uploaded directly from client to AWS S3 via cryptographically signed presigned URLs.
-   - **Zero file buffering in Node.js server RAM**, avoiding memory spikes and DoS vectors.
-3. **Zod Input Validation**:
-   - Every route validates `req.body`, `req.query`, and `req.params` against strict schemas before hitting controllers.
-4. **CORS & Rate Protection**:
-   - Granular CORS configuration binding WebSocket origins to verified frontend domains.
+The repository includes separate Docker configurations for local development and production deployment on AWS EC2:
 
----
-
----
-
-## 6. Containerization & Docker Architecture
-
-The server infrastructure provides a containerized development and deployment pipeline via **Docker** and **Docker Compose**, orchestrating the Express API service, PostgreSQL database, and the in-memory Redis presence cache into an isolated virtual bridge network.
+- **Local Development (`Dockerfile` & `docker-compose.yml`)**:
+  - Runs `node:22-alpine`, `postgres:16-alpine`, and `redis:alpine` with bind-mounted source code (`npm run dev`) and health checks (`pg_isready`).
+- **Production (`Dockerfile.prod` & `docker-compose.prod.yml`)**:
+  - Uses a two-stage `Dockerfile.prod`: Stage 1 (`builder`) installs dependencies, generates the Prisma client, and compiles TypeScript to `dist/`; Stage 2 (`runner`) installs only production dependencies (`npm install --omit=dev`) and copies `dist/` and Prisma schema/migrations.
+- **GitHub Actions CI/CD (`.github/workflows/deploy.yml`)**:
+  - On push to `main`, builds the production Docker image, pushes it to Docker Hub, copies `docker-compose.prod.yml` to AWS EC2 over SCP, pulls the new image, restarts the container stack, and runs `npx prisma migrate deploy`.
 
 ```mermaid
-flowchart TD
-    subgraph Host_Machine["Host Environment"]
-        SRC["Local Source Code (./Server)"]
-        CLIENT["Next.js Client (Port 3001)"]
-        BACKUP["Initial Data Seed (./backups/triphq_backup.sql)"]
-    end
-
-    subgraph Docker_Compose["Docker Compose Virtual Bridge Network"]
-        subgraph API_Container["Service: kafla-api (node:22-alpine)"]
-            APP["/app (Mounted Volume)"]
-            NM["/app/node_modules (Isolated Anonymous Volume)"]
-            START["Lifecycle: sh -c 'npm run db:generate && npm run dev'"]
-            LOGS["Log Rotation: json-file (max-size: 10m, max-file: 3)"]
-            PORT5001["Exposed Port: 5001"]
-        end
-
-        subgraph Postgres_Container["Service: postgres (postgres:16-alpine)"]
-            PG_PROC["PostgreSQL 16 Engine"]
-            PG_HEALTH["Healthcheck: pg_isready -U postgres -d triphq"]
-            PG_INIT["Entrypoint: /docker-entrypoint-initdb.d/01_init.sql"]
-            PG_VOL[("Named Volume: postgres_data (/var/lib/postgresql/data)")]
-            PORT5433["Host Port: 5433 (Internal: 5432)"]
-        end
-
-        subgraph Redis_Container["Service: redis (redis:alpine)"]
-            REDIS_PROC["Redis Server Engine (Port 6379)"]
-            REDIS_VOL[("Named Volume: redis_data (/var/lib/redis/data)")]
-        end
-    end
-
-    SRC <==>|Live Bind Mount| APP
-    APP --> START
-    CLIENT <==>|HTTP REST & WebSockets| PORT5001
-    PORT5001 --> APP
-    APP <==>|Pub/Sub, Caching & Presence| REDIS_PROC
-    APP <==>|Internal Network: postgres:5432| PG_PROC
-    BACKUP -.->|Mount on Init| PG_INIT
-    PG_INIT --> PG_PROC
-    PG_PROC <==>|State Persistence| PG_VOL
-    REDIS_PROC <==>|AOF/RDB Persistence| REDIS_VOL
-```
-
-### Containerization Engineering Details
-
-1. **Lightweight Alpine Runtime & Multi-Service Topology (`Dockerfile` & `docker-compose.yml`)**:
-   - Built on `node:22-alpine` and `postgres:16-alpine` to maintain a minimal surface area (< 180MB container footprint vs. standard 1GB+ Debian distributions).
-   - `.dockerignore` sanitization filters local `node_modules`, `.git`, environment files, and build artifacts to prevent host-container architecture leaks.
-
-2. **Automated Database Bootstrap & Volume Strategy**:
-   - **Automated Backup Restoration**: Mounts `./backups/triphq_backup.sql` to `/docker-entrypoint-initdb.d/01_init.sql` (read-only), automatically bootstrapping schemas, indexes, and existing data on initial volume creation.
-   - **Persistent PostgreSQL Data**: Managed by named volume `postgres_data` mounted to `/var/lib/postgresql/data`.
-   - **Live Source Mount**: Maps `.:/app` for real-time hot-reloading with `tsx watch`.
-   - **Anonymous Node Modules Volume**: Designates `/app/node_modules` as an isolated container volume. This guarantees compiled Linux native binaries (e.g., `bcrypt`, native bindings) remain uncorrupted by host OS filesystem differences (Windows/macOS).
-   - **Persistent Redis State**: Utilizes named volume `redis_data` mounted to `/var/lib/redis/data` to preserve cached presence rosters and volatile session states across container restarts.
-
-3. **Deterministic Service Dependency & Schema Synchronization**:
-   - `kafla-api` utilizes `depends_on` with `condition: service_healthy` on `postgres`, polling `pg_isready -U postgres -d triphq` to ensure the API container only boots once the database is fully initialized and accepting connections.
-   - Executes `npm run db:generate && npm run dev` directly on container startup, ensuring the Prisma Client type definitions automatically mirror any schema updates without requiring full image rebuilds.
-
-4. **Production-Grade Log Rotation**:
-   - Limits Docker JSON log growth via `max-size: '10m'` and `max-file: '3'`, protecting container hosts from uncontrolled disk saturation under heavy WebSocket throughput.
-
-### Docker Operations & Lifecycle Commands
-
-```bash
-# 1. Build and boot all services in attached mode
-docker compose up --build
-
-# 2. Boot services in background daemon mode
-docker compose up -d
-
-# 3. Stream real-time logs from the API container
-docker compose logs -f kafla-api
-
-# 4. Execute database migrations inside the active container
-docker compose exec kafla-api npm run db:migrate
-
-# 5. Open an interactive sh session inside the container
-docker compose exec -it kafla-api sh
-
-# 6. Graceful shutdown and volume teardown
-docker compose down -v
+flowchart LR
+    PUSH["Git Push (main)"] --> GHA["GitHub Actions: Build Dockerfile.prod"]
+    GHA --> DH["Push Image to Docker Hub"]
+    DH --> SSH["SSH into AWS EC2"]
+    SSH --> UP["docker compose -f docker-compose.prod.yml up -d"]
+    UP --> MIGRATE["npx prisma migrate deploy"]
 ```
 
 ---
 
-## 7. Local Setup & Manual Development
+## 6. Local Setup
 
-### Prerequisites
-- **Node.js**: `v20.x` or `v22.x` (LTS)
-- **PostgreSQL**: `15+` or `16`
-- **Redis**: `7.x`
-- **Docker & Docker Compose** (Optional, recommended for isolated setup)
+### Option A: With Docker Compose
 
-### Installation & Database Initialization
+```bash
+# Start API, PostgreSQL, and Redis
+docker compose up --build
+
+# Run in background
+docker compose up -d
+
+# View API logs
+docker compose logs -f kafla-api
+```
+
+### Option B: Manual Setup
 
 ```bash
 # 1. Install dependencies
@@ -441,34 +340,13 @@ npm run db:generate
 # 3. Run database migrations
 npm run db:migrate
 
-# 4. Start local development server with hot-reload
+# 4. Start development server
 npm run dev
 ```
 
----
-
-## 8. Verification & Production Build
+### Production Build
 
 ```bash
-# Type check and build TypeScript into dist/
 npm run build
-
-# Start production server
 npm run start
 ```
-
----
-
-## 9. Engineering Highlights for Technical Reviewers
-
-When evaluating this codebase, consider these specific implementations:
-- [`get-balances.usecase.ts`](file:///F:/Brocamp/Second%20Project/Kafla/Server/src/application/use-cases/expense/get-balances.usecase.ts): Cash flow graph minimization algorithm reducing $O(V^2)$ debts to $O(V - 1)$ transactions.
-- [`itinerary.graph.ts`](file:///F:/Brocamp/Second%20Project/Kafla/Server/src/infrastructure/ai/ai-itinerary/itinerary.graph.ts): Autonomous LangGraph state machine with validation, RAG context enrichment, and self-healing repair loops.
-- [`call.socket.ts`](file:///F:/Brocamp/Second%20Project/Kafla/Server/src/infrastructure/socket/call.socket.ts): Authorized WebRTC multi-peer mesh signaling engine.
-- [`container.ts`](file:///F:/Brocamp/Second%20Project/Kafla/Server/src/infrastructure/di/container.ts): TSyringe Inversion of Control setup enforcing Clean Architecture.
-- [`groups.prisma`](file:///F:/Brocamp/Second%20Project/Kafla/Server/src/infrastructure/database/schema/models/groups.prisma): Modular relational modeling with composite constraints, decimal financial types, and geo-indexing.
-
----
-
-### Author & License
-Crafted by the Kafla Engineering Team. Distributed under the MIT License.
